@@ -4,54 +4,31 @@ import torch
 import copy
 import random
 import numpy as np
+import time
 from collections import deque
 from torch import nn
 from torch import optim
 import torch.nn.functional as F
 
 # Create environment
-env = gym.make("MsPacman-v0")
+env = gym.make("MountainCar-v0")
 # Reset
-frame = env.reset()
-
-
-class Flatten(nn.Module):
-    def forward(self, x):
-        x = x.view(x.size(0), -1)
-        return x
-
-
-def to_grayscale(image):
-    #Constants from https://en.wikipedia.org/wiki/Grayscale
-    return 0.2126 * image[:, :, 0] + 0.7152 * image[:, :, 1] + 0.0722 * image[:, :, 2]
-
-
-def preprocesing(image):
-    grayscale = to_grayscale(image)
-    #Assume that image is 210x160
-    return [[grayscale[i * 160 // 84, j * 160 // 84]for j in range(84)] for i in range(84)]
-
-
-plt.imshow(preprocesing(frame), cmap="gray")
+state = env.reset()
+print(state)
 
 model = nn.Sequential(
-    nn.Conv2d(4, 32, 8, 4),
+    nn.Linear(2, 32),
     nn.ReLU(),
-    nn.Conv2d(32, 64, 4, 2),
+    nn.Linear(32, 32),
     nn.ReLU(),
-    nn.Conv2d(64, 64, 3, 1),
-    nn.ReLU(),
-    Flatten(),
-    nn.Linear(3136, 512),
-    nn.ReLU(),
-    nn.Linear(512, 5)
+    nn.Linear(32, 3)
 )
 
 target_model = copy.deepcopy(model)
 
 
 def init_weights(layer):
-    if type(layer) == nn.Linear or type(layer) == nn.Conv2d:
+    if type(layer) == nn.Linear:
         nn.init.xavier_normal(layer.weight)
         
 
@@ -64,14 +41,14 @@ target_model.train()
 model.to(device)
 target_model.to(device)
 
-optimizer = optim.RMSprop(model.parameters(), lr=0.00025, alpha=0.95, eps=0.01)
+optimizer = optim.Adam(model.parameters(), lr=0.00003)
 gamma = 0.99
 epsilon = 0.1
 
 
 def select_action(state):
     if random.random() < epsilon:
-        return random.randint(0, 4)
+        return random.randint(0, 2)
     return model(torch.tensor(state).to(device).float().unsqueeze(0))[0].max(0)[1].view(1, 1).item()
 
 
@@ -125,38 +102,49 @@ class Memory:
         return len(self.memory)
 
 
-memory = Memory(10000)
-last_four_frames = deque(maxlen=4)
+memory = Memory(5000)
 
-for i in range(4):
-    last_four_frames.append(np.expand_dims(preprocesing(frame), 2))
+reward_by_percentage = []
 
-summary_reward = 0.
-
-actual_state = np.swapaxes(np.concatenate(last_four_frames, axis=2), 2, 0)
-for step in range(1, 100001):
-    action = select_action(actual_state)
-    state, reward, done, _ = env.step(action)
-    last_four_frames.append(np.expand_dims(preprocesing(state), 2))
-
-    summary_reward += reward
+steps = 0
+max_step = 80001
+t = time.time()
+for step in range(1, max_step):
+    epsilon = 1 - 0.9 * step / max_step
+    action = select_action(state)
+    new_state, reward, done, _ = env.step(action)
+    steps += 1
 
     if done:
-        memory.push((actual_state, action, reward, None, done))
-        frame = env.reset()
-        for i in range(4):
-            last_four_frames.append(np.expand_dims(preprocesing(frame), 2))
+        memory.push((state, action, reward, state, done))
+        state = env.reset()
         done = False
-        actual_state = np.swapaxes(np.concatenate(last_four_frames, axis=2), 2, 0)
+        steps = 0
     else:
-        new_state = np.swapaxes(np.concatenate(last_four_frames, axis=2), 2, 0)
-        memory.push((actual_state, action, reward, new_state, done))
-        actual_state = new_state
+        memory.push((state, action, reward + abs(new_state[1]), new_state, done))
+        state = new_state
+        
+    if step > 128:
+        fit(list(zip(*memory.sample(128))))
 
-    if step > 32:
-        fit(list(zip(*memory.sample(32))))
-
-    if step % 1000 == 0:
+    if step % 2000 == 0:
         target_model = copy.deepcopy(model)
-        print("Progress", step // 1000, "%, average reward", summary_reward / 1000)
-        summary_reward = 0
+        print("Progress", step // 2000, "of", max_step // 2000, time.time() - t)
+        state = env.reset()
+        r = 0.
+        r2 = 0.
+        done = False
+        while not done:
+            epsilon = 0.
+            if (step // 2000) % 2 == 0:
+                env.render()
+            action = select_action(state)
+            state, reward, done, _ = env.step(action)
+            r += reward
+            r2 += reward + abs(state[1])
+            steps += 1
+        print("Reward:", r, r2)
+        reward_by_percentage.append(r)
+        steps = 0
+plt.plot(list(range(len(reward_by_percentage))), reward_by_percentage)
+plt.show()
