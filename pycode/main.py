@@ -134,7 +134,7 @@ for i in range(4):
 summary_reward = 0.
 
 actual_state = np.swapaxes(np.concatenate(last_four_frames, axis=2), 2, 0)
-for step in range(1000000):
+for step in range(1, 100001):
     action = select_action(actual_state)
     state, reward, done, _ = env.step(action)
     last_four_frames.append(np.expand_dims(preprocesing(state), 2))
@@ -156,7 +156,7 @@ for step in range(1000000):
     if step > 32:
         fit(list(zip(*memory.sample(32))))
 
-    if step % 10000 == 0:
+    if step % 1000 == 0:
         target_model = copy.deepcopy(model)
-        print("Progress", step // 10000, "%, average reward", summary_reward / 10000)
+        print("Progress", step // 1000, "%, average reward", summary_reward / 1000)
         summary_reward = 0
